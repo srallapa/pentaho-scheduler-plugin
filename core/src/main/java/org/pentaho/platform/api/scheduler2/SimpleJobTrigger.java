@@ -20,8 +20,15 @@
 
 package org.pentaho.platform.api.scheduler2;
 
+import com.cronutils.descriptor.CronDescriptor;
+import com.cronutils.model.CronType;
+import com.cronutils.model.definition.CronDefinition;
+import com.cronutils.model.definition.CronDefinitionBuilder;
+import com.cronutils.parser.CronParser;
+
 import java.io.Serializable;
 import java.util.Date;
+import java.util.Locale;
 import javax.xml.bind.annotation.XmlRootElement;
 
 /**
@@ -37,6 +44,7 @@ public class SimpleJobTrigger extends JobTrigger implements ISimpleJobTrigger {
   public static final int REPEAT_INDEFINITELY = -1;
   private int repeatCount = 0;
   private long repeatInterval = 0;
+  private String cronDescription;
 
   public SimpleJobTrigger( Date startTime, Date endTime, int repeatCount, long repeatIntervalSeconds ) {
     super( startTime, endTime );
@@ -61,6 +69,23 @@ public class SimpleJobTrigger extends JobTrigger implements ISimpleJobTrigger {
 
   public void setRepeatInterval( long repeatIntervalSeconds ) {
     this.repeatInterval = repeatIntervalSeconds;
+  }
+
+  @Override
+  public void setCronString(String cronString) {
+    super.setCronString(cronString);
+    getCronDescription();
+  }
+
+  @Override
+  public String getCronDescription() {
+    if(getCronString() != null && !getCronString().isEmpty() && (cronDescription == null || cronDescription.isEmpty())) {
+      CronDefinition cronDefinition = CronDefinitionBuilder.instanceDefinitionFor(CronType.QUARTZ);
+      CronDescriptor descriptor = CronDescriptor.instance(Locale.US);
+      CronParser parser = new CronParser(cronDefinition);
+      cronDescription = descriptor.describe(parser.parse(getCronString()));
+    }
+    return cronDescription;
   }
 
   @Override
