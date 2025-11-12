@@ -65,6 +65,7 @@ import org.pentaho.mantle.client.csrf.CsrfRequestBuilder;
 import org.pentaho.mantle.client.dialogs.scheduling.NewScheduleDialog;
 import org.pentaho.mantle.client.dialogs.scheduling.OutputLocationUtils;
 import org.pentaho.mantle.client.dialogs.scheduling.ParameterPreviewSidebar;
+import org.pentaho.mantle.client.dialogs.scheduling.ScheduleEditor;
 import org.pentaho.mantle.client.dialogs.scheduling.ScheduleFactory;
 import org.pentaho.mantle.client.dialogs.scheduling.ScheduleHelper;
 import org.pentaho.mantle.client.environment.EnvironmentHelper;
@@ -210,7 +211,7 @@ public class SchedulesPanel extends SimplePanel {
   };
 
   public SchedulesPanel( final boolean isAdmin, final boolean isScheduler, final boolean canExecuteSchedules,
-                         final boolean hideInternalVariables ) {
+                         final boolean hideInternalVariables) {
     createUI( isAdmin, isScheduler, canExecuteSchedules, hideInternalVariables );
     getTimeZoneData();
     refresh();
@@ -304,7 +305,7 @@ public class SchedulesPanel extends SimplePanel {
           JSONObject object = value.isObject();
           JSONValue serverTZvalue = object.get( "serverTzId" );
           JSONString serverTZIdString = serverTZvalue.isString();
-          serverTzString = serverTZIdString.stringValue().trim();
+          serverTzString = serverTZIdString.stringValue();
         }
 
         @Override
@@ -512,7 +513,7 @@ public class SchedulesPanel extends SimplePanel {
     TextColumn<JsJob> scheduleColumn = new TextColumn<JsJob>() {
       public String getValue( JsJob job ) {
         try {
-          return job.getJobTrigger().getDescription() + " " + getTimezone( job.getJobTrigger() );
+          return job.getJobTrigger().getDescription();
         } catch ( Exception e ) {
           return BLANK_VALUE;
         }
@@ -556,7 +557,7 @@ public class SchedulesPanel extends SimplePanel {
           DateTimeFormat formatMedium = DateTimeFormat.getFormat( PredefinedFormat.DATE_TIME_MEDIUM );
           DateTimeFormat format = DateTimeFormat.getFormat( formatMedium.getPattern() );
 
-          return format.format( date ) + " " + getTimezone( job.getJobTrigger() );
+          return format.format( date ) + " " + serverTzString;
         } catch ( Exception e ) {
           return BLANK_VALUE;
         }
@@ -574,7 +575,7 @@ public class SchedulesPanel extends SimplePanel {
 
           DateTimeFormat formatMedium = DateTimeFormat.getFormat( PredefinedFormat.DATE_TIME_MEDIUM );
           DateTimeFormat format = DateTimeFormat.getFormat( formatMedium.getPattern() );
-          return format.format( date ) + " " + getTimezone( job.getJobTrigger() );
+          return format.format( date ) + " " + serverTzString;
         } catch ( Exception e ) {
           return BLANK_VALUE;
         }
@@ -1461,22 +1462,6 @@ public class SchedulesPanel extends SimplePanel {
     return builder;
   }
 
-  private String getTimezone( JsJobTrigger trigger ) {
-    String jobTzString = trigger.getTimeZone();
-
-    if ( isTimezoneDefined( jobTzString ) ) {
-      return jobTzString.trim();
-    } else if ( isTimezoneDefined( serverTzString ) ) {
-      return serverTzString;
-    } else {
-      return getBrowserTimeZone();
-    }
-  }
-
-  private boolean isTimezoneDefined( String timeZone ) {
-    return timeZone != null && !timeZone.trim().isEmpty() && !"undefined".equals( timeZone.toLowerCase().trim() );
-  }
-
   private native JsArray<JsJob> parseJson( String json ) /*-{
     var obj = JSON.parse(json);
 
@@ -1501,9 +1486,5 @@ public class SchedulesPanel extends SimplePanel {
 
   public native void fireRefreshFolderEvent( String outputLocation ) /*-{
     $wnd.mantle.fireRefreshFolderEvent(outputLocation);
-  }-*/;
-
-  public final native String getBrowserTimeZone() /*-{
-    return Intl.DateTimeFormat().resolvedOptions().timeZone;
   }-*/;
 }
