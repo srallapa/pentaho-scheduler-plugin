@@ -54,6 +54,7 @@ import com.google.gwt.view.client.DefaultSelectionEventManager;
 import com.google.gwt.view.client.ListDataProvider;
 import com.google.gwt.view.client.MultiSelectionModel;
 import com.google.gwt.view.client.Range;
+import com.google.gwt.i18n.client.TimeZone;
 import org.pentaho.gwt.widgets.client.dialogs.IDialogCallback;
 import org.pentaho.gwt.widgets.client.dialogs.MessageDialogBox;
 import org.pentaho.gwt.widgets.client.toolbar.Toolbar;
@@ -84,6 +85,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.logging.Logger;
 
 import static org.pentaho.gwt.widgets.client.utils.ImageUtil.getThemeableImage;
 import static org.pentaho.mantle.client.workspace.SchedulesPerspectivePanel.PAGE_SIZE;
@@ -142,6 +144,9 @@ public class SchedulesPanel extends SimplePanel {
   private FilterDialog filterDialog;
 
   private String serverTzString;
+  private Logger logger = Logger.getLogger("SchedulePanel");
+  private TimeZone serverTimeZone;
+  private Map<String, TimeZone> timeZoneById = new HashMap<>();
   private Map<String, String> serverTimeZoneMap = new HashMap<>();
 
   private final IDialogCallback filterDialogCallback = new IDialogCallback() {
@@ -212,6 +217,8 @@ public class SchedulesPanel extends SimplePanel {
 
   public SchedulesPanel( final boolean isAdmin, final boolean isScheduler, final boolean canExecuteSchedules,
                          final boolean hideInternalVariables) {
+    int browserOffsetMinutes = new Date().getTimezoneOffset();
+    logger.info("Browser timezone offset (minutes from UTC) = " + browserOffsetMinutes);
     createUI( isAdmin, isScheduler, canExecuteSchedules, hideInternalVariables );
     getTimeZoneData();
     refresh();
@@ -299,13 +306,74 @@ public class SchedulesPanel extends SimplePanel {
       timeZonesRequest.sendRequest( null, new RequestCallback() {
 
         @Override
-        public void onResponseReceived( Request request, Response response ) {
-          String responseText = response.getText();
-          JSONValue value = JSONParser.parseLenient( responseText );
-          JSONObject object = value.isObject();
-          JSONValue serverTZvalue = object.get( "serverTzId" );
-          JSONString serverTZIdString = serverTZvalue.isString();
-          serverTzString = serverTZIdString.stringValue();
+        public void onResponseReceived(Request request, Response response) {
+          try {
+            String responseText = response.getText();
+            JSONObject root = JSONParser.parseLenient(responseText).isObject();
+
+            // 1) Read server TZ id: "America/Chicago"
+            JSONString serverTZIdString = root.get("serverTzId").isString();
+            serverTzString = serverTZIdString.stringValue();
+            logger.info("serverTzId from server: " + serverTzString);
+
+            // 2) Find corresponding entry in timeZones.entry[]
+            JSONObject timeZonesObj = root.get("timeZones").isObject();
+            JSONArray entries = timeZonesObj.get("entry").isArray();
+
+            for (int i = 0; i < entries.size(); i++) {
+              JSONObject entry = entries.get(i).isObject();
+              String key = entry.get("key").isString().stringValue();
+
+              if (serverTzString.equals(key)) {
+                String value = entry.get("value").isString().stringValue();
+                // e.g. "America/Chicago - Central Daylight Time (UTC-0600)"
+                int offsetMinutes = parseUtcOffsetMinutes(value);
+                serverTimeZone = TimeZone.createTimeZone(offsetMinutes);
+
+                logger.info("Matched server TZ entry: " + value +
+                        ", offsetMinutes=" + offsetMinutes);
+                break;
+              }
+            }
+
+            if (serverTimeZone == null) {
+              logger.warning("Could not determine serverTimeZone for " + serverTzString +
+                      " – falling back to browser time zone.");
+            }
+          } catch (Exception e) {
+            logger.severe("Error parsing /api/system/timezones: " + e.getMessage());
+          }
+        }
+
+        private int parseUtcOffsetMinutes(String display) {
+          // display example: "America/Chicago - Central Daylight Time (UTC-0600)"
+          int idx = display.indexOf("(UTC");
+          if (idx == -1) {
+            return 0; // fallback: UTC
+          }
+
+          int signIndex = idx + 4;           // char at this position is '+' or '-'
+          if (signIndex >= display.length()) {
+            return 0;
+          }
+
+          char signChar = display.charAt(signIndex);
+          int start = signIndex + 1;
+          int end = start + 4;               // e.g. "0600"
+          if (end > display.length()) {
+            return 0;
+          }
+
+          String hhmm = display.substring(start, end); // e.g. "0600"
+          int hours = Integer.parseInt(hhmm.substring(0, 2));
+          int minutes = Integer.parseInt(hhmm.substring(2, 4));
+          int totalMinutes = hours * 60 + minutes;
+
+          if (signChar == '-') {
+            totalMinutes = -totalMinutes;
+          }
+
+          return totalMinutes;
         }
 
         @Override
@@ -513,6 +581,7 @@ public class SchedulesPanel extends SimplePanel {
     TextColumn<JsJob> scheduleColumn = new TextColumn<JsJob>() {
       public String getValue( JsJob job ) {
         try {
+          logger.info( "schedule description for job: " + job.getJobTrigger().getDescription() );
           return job.getJobTrigger().getDescription();
         } catch ( Exception e ) {
           return BLANK_VALUE;
@@ -556,8 +625,18 @@ public class SchedulesPanel extends SimplePanel {
 
           DateTimeFormat formatMedium = DateTimeFormat.getFormat( PredefinedFormat.DATE_TIME_MEDIUM );
           DateTimeFormat format = DateTimeFormat.getFormat( formatMedium.getPattern() );
-
-          return format.format( date ) + " " + serverTzString;
+          //logger.info( "Server Time Zone String: " + serverTzString );
+          if (serverTimeZone != null) {
+            String serverFormatted = format.format(date, serverTimeZone);
+            String browserFormatted = format.format(date); // extra debug
+            logger.info("NextRun serverTZ=" + serverFormatted +
+                    ", browserTZ=" + browserFormatted);
+            return serverFormatted + " " + serverTzString;
+          } else {
+            // fallback: browser TZ if serverTimeZone not resolved (error case)
+            return format.format(date) + " " + serverTzString;
+          }
+          //return format.format( date ) + " " + serverTzString;
         } catch ( Exception e ) {
           return BLANK_VALUE;
         }
@@ -575,7 +654,17 @@ public class SchedulesPanel extends SimplePanel {
 
           DateTimeFormat formatMedium = DateTimeFormat.getFormat( PredefinedFormat.DATE_TIME_MEDIUM );
           DateTimeFormat format = DateTimeFormat.getFormat( formatMedium.getPattern() );
-          return format.format( date ) + " " + serverTzString;
+          if (serverTimeZone != null) {
+            String serverFormatted = format.format(date, serverTimeZone);
+            String browserFormatted = format.format(date); // extra debug
+            logger.info("NextRun serverTZ=" + serverFormatted +
+                    ", browserTZ=" + browserFormatted);
+            return serverFormatted + " " + serverTzString;
+          } else {
+            // fallback: browser TZ if serverTimeZone not resolved (error case)
+            return format.format(date) + " " + serverTzString;
+          }
+          //return format.format( date ) + " " + serverTzString;
         } catch ( Exception e ) {
           return BLANK_VALUE;
         }
